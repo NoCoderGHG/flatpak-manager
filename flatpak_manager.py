@@ -20,6 +20,22 @@ CONFIG_DIR  = Path.home() / ".config" / "flatpak-manager"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 I18N_DIR    = Path(__file__).parent / "i18n"
 
+SUPPORTED_LANGUAGES = {
+    "de": "Deutsch",
+    "en": "English",
+    "fr": "Français",
+    "es": "Español",
+    "it": "Italiano",
+    "pt": "Português",
+    "nl": "Nederlands",
+    "pl": "Polski",
+    "ru": "Русский",
+    "tr": "Türkçe",
+    "zh": "中文",
+    "ja": "日本語",
+}
+
+
 DEFAULT_CONFIG = {"lang": "system"}
 
 PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
@@ -57,7 +73,10 @@ def detect_system_lang():
         loc = ""
     if not loc:
         loc = os.environ.get("LANG", "")
-    return "de" if loc.lower().startswith("de") else "en"
+    code = loc.lower().split("_")[0].split(".")[0]
+    if code in SUPPORTED_LANGUAGES and (I18N_DIR / f"{code}.json").exists():
+        return code
+    return "de" if code == "de" else "en"
 
 
 def resolve_lang(setting):
@@ -82,6 +101,29 @@ def load_i18n(lang):
     for k, v in en.items():
         strings.setdefault(k, v)
     return strings
+
+def build_lang_options(strings):
+    """Liste (code, label) fuer das Sprachmenue. Sprachen ohne eigene
+    i18n-Datei werden mit "(EN)" markiert (Fallback auf Englisch)."""
+    opts = [("system", t(strings, "lang_system")),
+            ("de", t(strings, "lang_de")),
+            ("en", t(strings, "lang_en"))]
+    for code, name in SUPPORTED_LANGUAGES.items():
+        if code in ("de", "en"):
+            continue
+        label = name if (I18N_DIR / f"{code}.json").exists() else f"{name} (EN)"
+        opts.append((code, label))
+    return opts
+
+
+def build_lang_lists(strings):
+    """Wie build_lang_options, aber als getrennte Listen (codes, labels)."""
+    codes, items = [], []
+    for code, label in build_lang_options(strings):
+        codes.append(code)
+        items.append(label)
+    return codes, items
+
 
 
 def t(strings, key, **kwargs):
@@ -235,10 +277,15 @@ class FlatpakManagerWindow(Gtk.Window):
         header.props.title = t(s, "app_title")
         self.set_titlebar(header)
 
-        self._lang_options = [("de", "lang_de"), ("en", "lang_en"),
-                               ("system", "lang_system")]
+        about_btn = Gtk.Button()
+        about_btn.set_image(Gtk.Image.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON))
+        about_btn.set_tooltip_text(t(self.strings, "tooltip_about"))
+        about_btn.connect("clicked", self._on_about)
+        header.pack_end(about_btn)
+
+        self._lang_options = build_lang_options(self.strings)
         self.lang_menu_btn = Gtk.MenuButton()
-        self.lang_menu_btn.set_size_request(130, -1)
+        self.lang_menu_btn.set_size_request(170, -1)
         self._lang_label = Gtk.Label()
         self.lang_menu_btn.add(self._lang_label)
         lang_menu = Gtk.Menu()
@@ -825,6 +872,15 @@ class FlatpakManagerWindow(Gtk.Window):
             self._set_status(t(s, "err_app_start_short"))
 
     # ── Language ──────────────────────────────────────────────────────────────
+
+    def _on_about(self, _btn):
+        dlg = Gtk.AboutDialog(transient_for=self, modal=True)
+        dlg.set_program_name(t(self.strings, "app_title"))
+        dlg.set_version("1.0")
+        dlg.set_comments(t(self.strings, "about_comments"))
+        dlg.set_license_type(Gtk.License.MIT_X11)
+        dlg.run()
+        dlg.destroy()
 
     def _on_lang_menu_item(self, item, code):
         if not item.get_active(): return

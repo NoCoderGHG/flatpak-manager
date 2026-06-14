@@ -4,20 +4,17 @@
   "lang_en": "Englisch",
   "lang_system": "Systemsprache",
   "restart_hint": "Bitte neu starten.",
-
   "search_placeholder": "Suchbegriff eingeben...",
   "btn_search": "🔍 Suchen",
   "btn_show_installed": "📦 Installierte Apps",
   "btn_show_extensions": "🧩 Extensions",
   "btn_check_updates": "🔄 Updates prüfen",
-
   "col_name": "Name",
   "col_id": "App-ID",
   "col_version": "Version",
   "col_branch": "Branch",
   "col_status": "Status",
   "status_installed_label": "✅ Installiert",
-
   "section_app_management": "App-Verwaltung:",
   "btn_install": "⬇ Installieren",
   "btn_uninstall": "🗑 Deinstallieren",
@@ -25,18 +22,14 @@
   "btn_update_single": "🔄 App updaten",
   "btn_run": "▶ App starten",
   "chk_terminal": "Im Terminal starten",
-
   "section_ext_management": "Extension-Verwaltung:",
   "btn_find_extensions": "🔍 Extensions finden",
   "btn_install_all_extensions": "⬇ Alle Extensions installieren",
   "btn_update_all": "🚀 Alle Apps updaten",
-
   "frame_output": "Ausgabe",
-
   "status_ready": "Bereit",
   "warn_no_query": "Bitte einen Suchbegriff eingeben.",
   "warn_no_selection": "Bitte eine App auswählen.",
-
   "status_searching": "Suche nach '{query}'...",
   "status_apps_found": "{n} Apps gefunden für '{query}'",
   "status_apps_found_short": "{n} Apps gefunden",
@@ -46,17 +39,14 @@
   "status_parse_error": "Parsing-Fehler",
   "err_search_failed": "Fehler bei der Suche",
   "err_generic": "Fehler: {err}",
-
   "status_loading_installed": "Lade installierte Apps...",
   "status_installed_count": "{n} installierte Apps gefunden",
   "status_no_installed": "Keine installierten Apps gefunden",
   "err_loading": "Fehler beim Laden: {err}",
   "err_loading_short": "Fehler beim Laden",
-
   "status_loading_extensions": "Lade installierte Extensions...",
   "status_extensions_count": "{n} Extensions gefunden",
   "status_no_extensions": "Keine Extensions installiert",
-
   "info_already_installed": "'{id}' ist bereits installiert.",
   "info_not_installed": "'{id}' ist nicht installiert.",
   "confirm_install": "'{id}' installieren?",
@@ -67,7 +57,6 @@
   "status_install_failed": "\n❌ Fehler bei Installation von {id}",
   "status_install_failed_short": "Installation fehlgeschlagen",
   "msg_installed": "{id} wurde installiert.",
-
   "confirm_uninstall": "'{id}' wirklich deinstallieren?",
   "status_uninstalling": "Deinstalliere {id}...",
   "status_uninstall_success": "\n✅ {id} erfolgreich deinstalliert!",
@@ -75,17 +64,14 @@
   "status_uninstall_failed": "\n❌ Fehler bei Deinstallation von {id}",
   "status_uninstall_failed_short": "Deinstallation fehlgeschlagen",
   "msg_uninstalled": "{id} wurde deinstalliert.",
-
   "status_loading_info": "Lade Infos für {id}...",
   "status_info_loaded": "Informationen geladen",
-
   "status_checking_updates": "Prüfe auf Updates...\nAktualisiere App-Stream-Daten...",
   "status_checking_updates_short": "Prüfe auf Updates...",
   "status_all_uptodate": "✅ Alle Apps sind aktuell!",
   "status_updates_available": "🔄 Updates verfügbar für {n} Apps:\n\n",
   "status_updates_hint": "\n\nKlicke 'Alle Apps updaten' um alle zu aktualisieren.",
   "status_updates_count": "{n} Updates verfügbar",
-
   "confirm_update_all": "Alle Apps aktualisieren?\n\nDies kann einige Zeit dauern.",
   "status_updating_all": "Starte Updates...\n",
   "status_update_all_success": "\n✅ Alle Updates erfolgreich installiert!",
@@ -93,7 +79,6 @@
   "status_update_all_failed": "\n❌ Fehler beim Update",
   "status_update_all_failed_short": "Update fehlgeschlagen",
   "msg_update_all_success": "Alle Apps wurden aktualisiert.",
-
   "confirm_update_single": "'{id}' aktualisieren?",
   "status_updating": "Aktualisiere {id}...",
   "status_already_uptodate": "\n✅ {id} ist bereits aktuell!",
@@ -103,13 +88,11 @@
   "status_update_failed": "\n❌ Fehler beim Update von {id}",
   "status_update_failed_short": "Update fehlgeschlagen",
   "msg_update_success": "{id} wurde aktualisiert.",
-
   "status_searching_extensions": "Suche Extensions für {id}...",
   "status_extensions_found": "🧩 {n} Extensions gefunden für {id}",
   "status_extensions_found_short": "{n} Extensions gefunden",
   "status_no_extensions_found": "❌ Keine Extensions gefunden für {id}",
   "status_no_extensions_found_short": "Keine Extensions gefunden",
-
   "info_no_extensions_to_install": "Keine Extensions zum Installieren gefunden.\n\nBitte erst 'Extensions finden' verwenden.",
   "info_all_extensions_installed": "Alle Extensions sind bereits installiert.",
   "confirm_install_extensions": "{n} Extensions installieren?",
@@ -119,11 +102,12 @@
   "status_install_extensions_failed": "\n❌ Fehler bei der Installation",
   "status_install_extensions_failed_short": "Installation fehlgeschlagen",
   "msg_extensions_installed": "{n} Extensions wurden installiert.",
-
   "status_starting_app": "Starte {id}...",
   "status_run_terminal": "Starte {id} im Terminal...",
   "status_app_started": "✅ {id} wurde gestartet",
   "err_app_start": "❌ Fehler beim Starten von {id}: {err}",
   "err_app_start_short": "Fehler beim Starten",
-  "err_no_terminal": "Kein Terminal-Emulator gefunden!"
+  "err_no_terminal": "Kein Terminal-Emulator gefunden!",
+  "tooltip_about": "Über Flatpak Manager",
+  "about_comments": "Flatpaks installieren, entfernen, aktualisieren.\n\nTeil der GTK3-Toolbox (NoCoderGHG)."
 }
