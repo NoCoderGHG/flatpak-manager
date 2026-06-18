@@ -366,8 +366,10 @@ class FlatpakManagerWindow(Gtk.Window):
         vbox.pack_start(lbl_app, False, False, 0)
 
         app_row = Gtk.Box(spacing=6)
-        self.btn_install = Gtk.Button(label=t(s, "btn_install"))
-        self.btn_install.connect("clicked", lambda _b: self._on_install())
+        self.btn_install_system = Gtk.Button(label=t(s, "btn_install_system"))
+        self.btn_install_system.connect("clicked", lambda _b: self._on_install("--system"))
+        self.btn_install_user = Gtk.Button(label=t(s, "btn_install_user"))
+        self.btn_install_user.connect("clicked", lambda _b: self._on_install("--user"))
         self.btn_uninstall = Gtk.Button(label=t(s, "btn_uninstall"))
         self.btn_uninstall.connect("clicked", lambda _b: self._on_uninstall())
         self.btn_info = Gtk.Button(label=t(s, "btn_info"))
@@ -377,8 +379,8 @@ class FlatpakManagerWindow(Gtk.Window):
         self.btn_run = Gtk.Button(label=t(s, "btn_run"))
         self.btn_run.connect("clicked", lambda _b: self._on_run())
         self.chk_terminal = Gtk.CheckButton(label=t(s, "chk_terminal"))
-        for w in [self.btn_install, self.btn_uninstall, self.btn_info,
-                  self.btn_update_single, self.btn_run]:
+        for w in [self.btn_install_system, self.btn_install_user, self.btn_uninstall,
+                  self.btn_info, self.btn_update_single, self.btn_run]:
             app_row.pack_start(w, False, False, 0)
         app_row.pack_start(self.chk_terminal, False, False, 12)
         vbox.pack_start(app_row, False, False, 0)
@@ -580,7 +582,7 @@ class FlatpakManagerWindow(Gtk.Window):
 
         run_shell_async("flatpak list --runtime", done)
 
-    def _on_install(self):
+    def _on_install(self, scope="--system"):
         s = self.strings
         app_id = self._get_selected_app_id()
         if not app_id: return
@@ -589,7 +591,8 @@ class FlatpakManagerWindow(Gtk.Window):
             self._info_dialog(t(s, "info_already_installed", id=app_id))
             return
 
-        if not self._confirm(t(s, "confirm_install", id=app_id)):
+        scope_label = t(s, "scope_system") if scope == "--system" else t(s, "scope_user")
+        if not self._confirm(t(s, "confirm_install", id=app_id) + f"\n({scope_label})"):
             return
 
         self._set_output(t(s, "status_install_starting", id=app_id))
@@ -612,7 +615,7 @@ class FlatpakManagerWindow(Gtk.Window):
                 self._append_output(t(s, "status_install_failed", id=app_id))
                 self._set_status(t(s, "status_install_failed_short"))
 
-        run_shell_live(f"flatpak install -y flathub {app_id}", on_line, on_done)
+        run_shell_live(f"flatpak install -y {scope} flathub {app_id}", on_line, on_done)
 
     def _on_uninstall(self):
         s = self.strings
@@ -659,8 +662,12 @@ class FlatpakManagerWindow(Gtk.Window):
             self._set_output(text)
             self._set_status(t(s, "status_info_loaded"))
 
+        # flatpak info für installierte Apps; remote-info mit explizitem Scope für nicht installierte
         run_shell_async(
-            f"flatpak info {app_id} 2>/dev/null || flatpak remote-info flathub {app_id}", done)
+            f"flatpak info {app_id} 2>/dev/null || "
+            f"flatpak remote-info --system flathub {app_id} 2>/dev/null || "
+            f"flatpak remote-info --user flathub {app_id}",
+            done)
 
     def _on_check_updates(self):
         s = self.strings
@@ -813,7 +820,28 @@ class FlatpakManagerWindow(Gtk.Window):
         preview = "\n".join(f"• {e['name']}" for e in to_install[:5])
         if len(to_install) > 5:
             preview += "\n• ..."
-        if not self._confirm(t(s, "confirm_install_extensions", n=len(to_install)) + "\n\n" + preview):
+
+        # Scope-Auswahl per Dialog
+        scope_dlg = Gtk.Dialog(
+            title=t(s, "confirm_install_extensions", n=len(to_install)),
+            transient_for=self, modal=True,
+        )
+        scope_dlg.add_button(t(s, "btn_install_system"), 1)
+        scope_dlg.add_button(t(s, "btn_install_user"), 2)
+        scope_dlg.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        lbl = Gtk.Label(label=preview)
+        lbl.set_margin_start(16); lbl.set_margin_end(16)
+        lbl.set_margin_top(12); lbl.set_margin_bottom(12)
+        scope_dlg.get_content_area().add(lbl)
+        scope_dlg.show_all()
+        resp = scope_dlg.run()
+        scope_dlg.destroy()
+
+        if resp == 1:
+            scope = "--system"
+        elif resp == 2:
+            scope = "--user"
+        else:
             return
 
         self._set_output(t(s, "status_installing_extensions", n=len(to_install)))
@@ -837,7 +865,7 @@ class FlatpakManagerWindow(Gtk.Window):
                 self._append_output(t(s, "status_install_extensions_failed"))
                 self._set_status(t(s, "status_install_extensions_failed_short"))
 
-        run_shell_live(f"flatpak install -y flathub {ext_ids}", on_line, on_done)
+        run_shell_live(f"flatpak install -y {scope} flathub {ext_ids}", on_line, on_done)
 
     def _on_run(self):
         s = self.strings
