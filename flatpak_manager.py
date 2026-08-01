@@ -38,6 +38,8 @@ SUPPORTED_LANGUAGES = {
 
 DEFAULT_CONFIG = {"lang": "system"}
 
+APP_VERSION = "1.2"
+
 PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 TERMINALS = ["gnome-terminal", "konsole", "xfce4-terminal",
@@ -256,6 +258,63 @@ def find_terminal():
     return None
 
 
+SIZE_UNITS = {"B": 1, "KB": 1000, "MB": 1000 ** 2, "GB": 1000 ** 3, "TB": 1000 ** 4,
+              "KIB": 1024, "MIB": 1024 ** 2, "GIB": 1024 ** 3, "TIB": 1024 ** 4}
+
+SIZE_RE = re.compile(r"([\d.,]+)\s*([KMGT]?i?B)", re.IGNORECASE)
+
+
+def parse_size_to_bytes(text):
+    """'12.3 MB' -> Bytes (0 wenn nicht parsebar)."""
+    if not text:
+        return 0
+    m = SIZE_RE.search(text)
+    if not m:
+        return 0
+    num = m.group(1).replace(",", ".")
+    try:
+        value = float(num)
+    except ValueError:
+        return 0
+    return int(value * SIZE_UNITS.get(m.group(2).upper(), 1))
+
+
+def human_size(num_bytes):
+    if num_bytes <= 0:
+        return "?"
+    for unit in ("B", "kB", "MB", "GB", "TB"):
+        if num_bytes < 1000 or unit == "TB":
+            return f"{num_bytes:.1f} {unit}" if unit != "B" else f"{num_bytes:.0f} B"
+        num_bytes /= 1000.0
+    return "?"
+
+
+def fetch_entry_info(entry):
+    """Ermittelt Download-/Installationsgroesse und Runtime fuer einen Queue-Eintrag.
+    Laeuft im Worker-Thread. LC_ALL=C sorgt fuer stabile Feldnamen."""
+    app_id = entry["id"]
+    if entry["action"] == "install":
+        cmd = (f"LC_ALL=C flatpak remote-info --system flathub {app_id} 2>/dev/null || "
+               f"LC_ALL=C flatpak remote-info --user flathub {app_id} 2>/dev/null")
+    else:
+        cmd = f"LC_ALL=C flatpak info {app_id} 2>/dev/null"
+    rc, out, _ = run_shell(cmd)
+    size_text, runtime = "", ""
+    for line in out.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        if low.startswith("download:") and entry["action"] == "install":
+            size_text = stripped.split(":", 1)[1].strip()
+        elif low.startswith("installed:") and (entry["action"] == "remove" or not size_text):
+            size_text = stripped.split(":", 1)[1].strip()
+        elif low.startswith("runtime:"):
+            runtime = stripped.split(":", 1)[1].strip()
+    entry["size"] = size_text
+    entry["bytes"] = parse_size_to_bytes(size_text)
+    entry["runtime"] = runtime
+    return rc == 0
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class FlatpakManagerWindow(Gtk.Window):
@@ -270,12 +329,19 @@ class FlatpakManagerWindow(Gtk.Window):
         self.set_title(t(s, "app_title"))
         self.installed_apps = set()
         self.current_extensions = []
+        self.queue = []            # nur zur Laufzeit, nicht persistent
+        self.queue_dialog = None
 
         # HeaderBar
         header = Gtk.HeaderBar()
         header.set_show_close_button(True)
         header.props.title = t(s, "app_title")
         self.set_titlebar(header)
+
+        self.btn_queue_open = Gtk.Button(label=t(s, "btn_queue_open", n=0))
+        self.btn_queue_open.set_tooltip_text(t(s, "tooltip_queue"))
+        self.btn_queue_open.connect("clicked", lambda _b: self._open_queue_dialog())
+        header.pack_start(self.btn_queue_open)
 
         about_btn = Gtk.Button()
         about_btn.set_image(Gtk.Image.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON))
@@ -338,7 +404,7 @@ class FlatpakManagerWindow(Gtk.Window):
         # TreeView: name, id, version, branch, status, weight
         self.store = Gtk.ListStore(str, str, str, str, str, int)
         self.tv = Gtk.TreeView(model=self.store)
-        self.tv.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+        self.tv.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
         for i, (key, expand, min_w) in enumerate([
             ("col_name", True, 200), ("col_id", True, 260),
@@ -385,6 +451,27 @@ class FlatpakManagerWindow(Gtk.Window):
         app_row.pack_start(self.chk_terminal, False, False, 12)
         vbox.pack_start(app_row, False, False, 0)
 
+        # Queue actions
+        lbl_queue = Gtk.Label(label=t(s, "section_queue"), xalign=0)
+        lbl_queue.get_style_context().add_class("dim-label")
+        vbox.pack_start(lbl_queue, False, False, 0)
+
+        queue_row = Gtk.Box(spacing=6)
+        self.btn_queue_add = Gtk.Button(label=t(s, "btn_queue_add"))
+        self.btn_queue_add.set_tooltip_text(t(s, "tooltip_queue_add"))
+        self.btn_queue_add.connect("clicked", lambda _b: self._on_queue_add(None))
+        self.btn_queue_add_install = Gtk.Button(label=t(s, "btn_queue_add_install"))
+        self.btn_queue_add_install.connect("clicked", lambda _b: self._on_queue_add("install"))
+        self.btn_queue_add_remove = Gtk.Button(label=t(s, "btn_queue_add_remove"))
+        self.btn_queue_add_remove.connect("clicked", lambda _b: self._on_queue_add("remove"))
+        self.btn_queue_show = Gtk.Button(label=t(s, "btn_queue_show"))
+        self.btn_queue_show.get_style_context().add_class("suggested-action")
+        self.btn_queue_show.connect("clicked", lambda _b: self._open_queue_dialog())
+        for w in [self.btn_queue_add, self.btn_queue_add_install,
+                  self.btn_queue_add_remove, self.btn_queue_show]:
+            queue_row.pack_start(w, False, False, 0)
+        vbox.pack_start(queue_row, False, False, 0)
+
         # Extension actions
         lbl_ext = Gtk.Label(label=t(s, "section_ext_management"), xalign=0)
         lbl_ext.get_style_context().add_class("dim-label")
@@ -395,9 +482,12 @@ class FlatpakManagerWindow(Gtk.Window):
         self.btn_find_ext.connect("clicked", lambda _b: self._on_find_extensions())
         self.btn_install_all_ext = Gtk.Button(label=t(s, "btn_install_all_extensions"))
         self.btn_install_all_ext.connect("clicked", lambda _b: self._on_install_all_extensions())
+        self.btn_queue_all_ext = Gtk.Button(label=t(s, "btn_queue_all_extensions"))
+        self.btn_queue_all_ext.connect("clicked", lambda _b: self._on_queue_all_extensions())
         self.btn_update_all = Gtk.Button(label=t(s, "btn_update_all"))
         self.btn_update_all.connect("clicked", lambda _b: self._on_update_all())
-        for w in [self.btn_find_ext, self.btn_install_all_ext, self.btn_update_all]:
+        for w in [self.btn_find_ext, self.btn_install_all_ext,
+                  self.btn_queue_all_ext, self.btn_update_all]:
             ext_row.pack_start(w, False, False, 0)
         vbox.pack_start(ext_row, False, False, 0)
 
@@ -474,13 +564,22 @@ class FlatpakManagerWindow(Gtk.Window):
             self.store.append([app["name"], app["id"], app.get("version", ""),
                                app.get("branch", "stable"), status, weight])
 
+    def _get_selected_rows(self):
+        """Liste aus (name, id) aller markierten Zeilen."""
+        model, paths = self.tv.get_selection().get_selected_rows()
+        rows = []
+        for path in paths:
+            it = model.get_iter(path)
+            rows.append((model.get_value(it, 0), model.get_value(it, 1)))
+        return rows
+
     def _get_selected_app_id(self):
         s = self.strings
-        model, it = self.tv.get_selection().get_selected()
-        if it is None:
+        rows = self._get_selected_rows()
+        if not rows:
             self._set_status(t(s, "warn_no_selection"))
             return None
-        return model.get_value(it, 1)
+        return rows[0][1]
 
     def _confirm(self, text):
         dialog = Gtk.MessageDialog(
@@ -505,6 +604,102 @@ class FlatpakManagerWindow(Gtk.Window):
         self.installed_apps = load_installed_apps()
         self._on_show_installed()
         return False
+
+    # ── Queue ─────────────────────────────────────────────────────────────────
+
+    def _update_queue_button(self):
+        s = self.strings
+        pending = sum(1 for e in self.queue if e["state"] in ("pending", "failed"))
+        self.btn_queue_open.set_label(t(s, "btn_queue_open", n=pending))
+
+    def _queue_entry(self, app_id):
+        for entry in self.queue:
+            if entry["id"] == app_id:
+                return entry
+        return None
+
+    def _queue_add_entry(self, name, app_id, action):
+        """Fuegt hinzu oder aktualisiert die Aktion. Rueckgabe: 'added' | 'updated'."""
+        entry = self._queue_entry(app_id)
+        if entry:
+            if entry["action"] == action:
+                return "exists"
+            entry["action"] = action
+            entry["state"] = "pending"
+            entry["size"] = ""
+            entry["bytes"] = 0
+            entry["log"] = ""
+            return "updated"
+        self.queue.append({
+            "name": name, "id": app_id, "action": action,
+            "size": "", "bytes": 0, "runtime": "", "state": "pending", "log": "",
+        })
+        return "added"
+
+    def _on_queue_add(self, action=None):
+        """action=None -> automatisch (installiert = entfernen, sonst installieren)."""
+        s = self.strings
+        rows = self._get_selected_rows()
+        if not rows:
+            self._set_status(t(s, "warn_no_selection"))
+            return
+
+        added = updated = skipped = 0
+        for name, app_id in rows:
+            act = action
+            if act is None:
+                act = "remove" if app_id in self.installed_apps else "install"
+            result = self._queue_add_entry(name, app_id, act)
+            if result == "added":
+                added += 1
+            elif result == "updated":
+                updated += 1
+            else:
+                skipped += 1
+
+        self._update_queue_button()
+        if self.queue_dialog:
+            self.queue_dialog.refresh()
+        self._set_status(t(s, "queue_added_status", added=added,
+                           updated=updated, skipped=skipped))
+
+    def _on_queue_all_extensions(self):
+        s = self.strings
+        if not self.current_extensions:
+            self._info_dialog(t(s, "info_no_extensions_to_install"))
+            return
+        to_add = [e for e in self.current_extensions if e["id"] not in self.installed_apps]
+        if not to_add:
+            self._info_dialog(t(s, "info_all_extensions_installed"))
+            return
+        added = 0
+        for ext in to_add:
+            if self._queue_add_entry(ext["name"], ext["id"], "install") == "added":
+                added += 1
+        self._update_queue_button()
+        if self.queue_dialog:
+            self.queue_dialog.refresh()
+        self._set_status(t(s, "queue_added_status", added=added, updated=0,
+                           skipped=len(to_add) - added))
+
+    def _open_queue_dialog(self):
+        if self.queue_dialog:
+            self.queue_dialog.present()
+            return
+        dlg = QueueDialog(self)
+        self.queue_dialog = dlg
+        dlg.connect("destroy", self._on_queue_dialog_closed)
+        dlg.show_all()
+
+    def _on_queue_dialog_closed(self, _dlg):
+        self.queue_dialog = None
+        self._update_queue_button()
+
+    def queue_finished(self):
+        """Wird vom Dialog nach dem Abarbeiten aufgerufen."""
+        self.installed_apps = load_installed_apps()
+        self._update_queue_button()
+        self._on_show_installed()
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -904,7 +1099,7 @@ class FlatpakManagerWindow(Gtk.Window):
     def _on_about(self, _btn):
         dlg = Gtk.AboutDialog(transient_for=self, modal=True)
         dlg.set_program_name(t(self.strings, "app_title"))
-        dlg.set_version("1.0")
+        dlg.set_version(APP_VERSION)
         dlg.set_comments(t(self.strings, "about_comments"))
         dlg.set_license_type(Gtk.License.MIT_X11)
         dlg.run()
@@ -928,6 +1123,372 @@ class FlatpakManagerWindow(Gtk.Window):
         )
         dlg.run()
         dlg.destroy()
+
+
+# ── Queue window ──────────────────────────────────────────────────────────────
+
+class QueueDialog(Gtk.Window):
+    """Merkliste: mehrere Apps/Extensions vormerken und gesammelt
+    installieren bzw. entfernen. Existiert nur zur Laufzeit."""
+
+    STATE_KEYS = {
+        "pending":  "queue_state_pending",
+        "running":  "queue_state_running",
+        "ok":       "queue_state_ok",
+        "failed":   "queue_state_failed",
+        "skipped":  "queue_state_skipped",
+    }
+
+    def __init__(self, parent):
+        super().__init__()
+        self.parent_win = parent
+        self.strings = parent.strings
+        s = self.strings
+
+        self.set_transient_for(parent)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(880, 620)
+        self.set_title(t(s, "queue_title"))
+
+        header = Gtk.HeaderBar()
+        header.set_show_close_button(True)
+        header.props.title = t(s, "queue_title")
+        self.set_titlebar(header)
+
+        self.running = False
+        self.cancelled = False
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for setter in ("set_margin_top", "set_margin_bottom",
+                       "set_margin_start", "set_margin_end"):
+            getattr(vbox, setter)(10)
+        self.add(vbox)
+
+        # Liste
+        self.store = Gtk.ListStore(str, str, str, str, str, int)
+        self.tv = Gtk.TreeView(model=self.store)
+        self.tv.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+        self.tv.get_selection().connect("changed", self._on_row_selected)
+
+        for i, (key, expand, min_w) in enumerate([
+            ("queue_col_action", False, 110), ("col_name", True, 180),
+            ("col_id", True, 240), ("queue_col_size", False, 90),
+            ("queue_col_status", False, 110),
+        ]):
+            r = Gtk.CellRendererText()
+            r.set_property("ellipsize", Pango.EllipsizeMode.END)
+            col = Gtk.TreeViewColumn(t(s, key), r, text=i)
+            col.set_expand(expand)
+            col.set_resizable(True)
+            col.set_min_width(min_w)
+            self.tv.append_column(col)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(200)
+        scroll.add(self.tv)
+        vbox.pack_start(scroll, True, True, 0)
+
+        # Aktionen
+        action_row = Gtk.Box(spacing=6)
+        self.btn_fetch = Gtk.Button(label=t(s, "btn_queue_fetch_info"))
+        self.btn_fetch.connect("clicked", lambda _b: self._on_fetch_info())
+        self.btn_remove = Gtk.Button(label=t(s, "btn_queue_remove_entry"))
+        self.btn_remove.connect("clicked", lambda _b: self._on_remove_entry())
+        self.btn_clear = Gtk.Button(label=t(s, "btn_queue_clear"))
+        self.btn_clear.connect("clicked", lambda _b: self._on_clear())
+        for w in (self.btn_fetch, self.btn_remove, self.btn_clear):
+            action_row.pack_start(w, False, False, 0)
+
+        action_row.pack_start(Gtk.Label(label=t(s, "queue_scope_label")), False, False, 12)
+        self.scope_combo = Gtk.ComboBoxText()
+        self.scope_combo.append("--system", t(s, "scope_system"))
+        self.scope_combo.append("--user", t(s, "scope_user"))
+        self.scope_combo.set_active_id("--system")
+        action_row.pack_start(self.scope_combo, False, False, 0)
+
+        self.btn_run = Gtk.Button(label=t(s, "btn_queue_run"))
+        self.btn_run.get_style_context().add_class("suggested-action")
+        self.btn_run.connect("clicked", lambda _b: self._on_run())
+        self.btn_cancel = Gtk.Button(label=t(s, "btn_queue_cancel"))
+        self.btn_cancel.set_sensitive(False)
+        self.btn_cancel.connect("clicked", lambda _b: self._on_cancel())
+        action_row.pack_end(self.btn_run, False, False, 0)
+        action_row.pack_end(self.btn_cancel, False, False, 0)
+        vbox.pack_start(action_row, False, False, 0)
+
+        # Zusammenfassung + Fortschritt
+        self.summary = Gtk.Label(xalign=0)
+        self.summary.get_style_context().add_class("dim-label")
+        vbox.pack_start(self.summary, False, False, 0)
+
+        self.progress = Gtk.ProgressBar()
+        self.progress.set_show_text(True)
+        vbox.pack_start(self.progress, False, False, 0)
+
+        # Log
+        lbl_log = Gtk.Label(label=t(s, "queue_log_label"), xalign=0)
+        lbl_log.get_style_context().add_class("dim-label")
+        vbox.pack_start(lbl_log, False, False, 0)
+
+        log_scroll = Gtk.ScrolledWindow()
+        log_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        log_scroll.set_min_content_height(150)
+        self.log_view = Gtk.TextView()
+        self.log_view.set_editable(False)
+        self.log_view.set_monospace(True)
+        self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.log_buf = self.log_view.get_buffer()
+        log_scroll.add(self.log_view)
+        vbox.pack_start(log_scroll, False, False, 0)
+
+        self.refresh()
+
+    # ── Anzeige ───────────────────────────────────────────────────────────────
+
+    @property
+    def queue(self):
+        return self.parent_win.queue
+
+    def _selected_index(self):
+        model, it = self.tv.get_selection().get_selected()
+        if it is None:
+            return -1
+        return model.get_value(it, 5)
+
+    def refresh(self, keep_index=None):
+        s = self.strings
+        if keep_index is None:
+            keep_index = self._selected_index()
+        self.store.clear()
+        for idx, e in enumerate(self.queue):
+            action_label = t(s, "queue_action_install" if e["action"] == "install"
+                             else "queue_action_remove")
+            state_label = t(s, self.STATE_KEYS.get(e["state"], "queue_state_pending"))
+            self.store.append([action_label, e["name"], e["id"],
+                               e["size"] or "–", state_label, idx])
+        if 0 <= keep_index < len(self.queue):
+            self.tv.get_selection().select_path(Gtk.TreePath(keep_index))
+        self._update_summary()
+        self.parent_win._update_queue_button()
+
+    def _update_summary(self):
+        s = self.strings
+        installs = sum(1 for e in self.queue if e["action"] == "install")
+        removes = sum(1 for e in self.queue if e["action"] == "remove")
+        dl_bytes = sum(e.get("bytes", 0) for e in self.queue if e["action"] == "install")
+        free_bytes = sum(e.get("bytes", 0) for e in self.queue if e["action"] == "remove")
+        self.summary.set_text(t(s, "queue_summary",
+                                total=len(self.queue), installs=installs,
+                                removes=removes, download=human_size(dl_bytes),
+                                freed=human_size(free_bytes)))
+
+    def _set_log(self, text):
+        self.log_buf.set_text(text)
+        self.log_view.scroll_to_iter(self.log_buf.get_end_iter(), 0, False, 0, 0)
+
+    def _on_row_selected(self, _sel):
+        if self.running:
+            return
+        idx = self._selected_index()
+        s = self.strings
+        if idx < 0 or idx >= len(self.queue):
+            self._set_log("")
+            return
+        entry = self.queue[idx]
+        header = ""
+        if entry.get("runtime"):
+            header = t(s, "queue_runtime", runtime=entry["runtime"]) + "\n"
+        self._set_log(header + (entry.get("log") or t(s, "queue_log_empty")))
+
+    def _set_buttons_running(self, running):
+        for w in (self.btn_fetch, self.btn_remove, self.btn_clear,
+                  self.btn_run, self.scope_combo):
+            w.set_sensitive(not running)
+        self.btn_cancel.set_sensitive(running)
+
+    # ── Aktionen ──────────────────────────────────────────────────────────────
+
+    def _on_remove_entry(self):
+        idx = self._selected_index()
+        if idx < 0 or idx >= len(self.queue):
+            return
+        del self.queue[idx]
+        self.refresh(keep_index=min(idx, len(self.queue) - 1))
+        self._set_log("")
+
+    def _on_clear(self):
+        if not self.queue:
+            return
+        self.queue.clear()
+        self.refresh(keep_index=-1)
+        self._set_log("")
+
+    def _on_fetch_info(self):
+        s = self.strings
+        pending = [e for e in self.queue if not e.get("size")]
+        if not pending:
+            self._update_summary()
+            return
+        self._set_buttons_running(True)
+        self.progress.set_fraction(0.0)
+        self.progress.set_text(t(s, "queue_fetching_info"))
+        total = len(pending)
+
+        def worker():
+            for i, entry in enumerate(pending, 1):
+                fetch_entry_info(entry)
+                GLib.idle_add(self._fetch_progress, i, total)
+            GLib.idle_add(self._fetch_done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _fetch_progress(self, done, total):
+        self.progress.set_fraction(done / total)
+        return False
+
+    def _fetch_done(self):
+        s = self.strings
+        self._set_buttons_running(False)
+        self.progress.set_fraction(0.0)
+        self.progress.set_text(t(s, "queue_info_done"))
+        self.refresh()
+        return False
+
+    def _on_cancel(self):
+        self.cancelled = True
+        self.btn_cancel.set_sensitive(False)
+
+    def _on_run(self):
+        s = self.strings
+        todo = [e for e in self.queue if e["state"] in ("pending", "failed")]
+        if not todo:
+            dlg = Gtk.MessageDialog(transient_for=self, modal=True,
+                                    message_type=Gtk.MessageType.INFO,
+                                    buttons=Gtk.ButtonsType.OK,
+                                    text=t(s, "queue_nothing_to_do"))
+            dlg.run()
+            dlg.destroy()
+            return
+
+        installs = sum(1 for e in todo if e["action"] == "install")
+        removes = len(todo) - installs
+        dlg = Gtk.MessageDialog(transient_for=self, modal=True,
+                                message_type=Gtk.MessageType.QUESTION,
+                                buttons=Gtk.ButtonsType.YES_NO,
+                                text=t(s, "queue_confirm_run",
+                                       installs=installs, removes=removes))
+        resp = dlg.run()
+        dlg.destroy()
+        if resp != Gtk.ResponseType.YES:
+            return
+
+        scope = self.scope_combo.get_active_id() or "--system"
+        self.running = True
+        self.cancelled = False
+        self._set_buttons_running(True)
+        self.progress.set_fraction(0.0)
+
+        for entry in todo:
+            entry["state"] = "pending"
+            entry["log"] = ""
+        self.refresh()
+
+        total = len(todo)
+
+        def worker():
+            for i, entry in enumerate(todo):
+                if self.cancelled:
+                    entry["state"] = "skipped"
+                    GLib.idle_add(self._entry_updated, entry, i, total, 0.0)
+                    continue
+                entry["state"] = "running"
+                GLib.idle_add(self._entry_started, entry, i, total)
+
+                if entry["action"] == "install":
+                    cmd = f"flatpak install -y {scope} flathub {entry['id']}"
+                else:
+                    cmd = f"flatpak uninstall -y {entry['id']}"
+                entry["log"] += f"$ {cmd}\n"
+                GLib.idle_add(self._append_log_line, entry, f"$ {cmd}")
+
+                try:
+                    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    for line in proc.stdout:
+                        line = line.rstrip("\n")
+                        if not line.strip():
+                            continue
+                        entry["log"] += line + "\n"
+                        GLib.idle_add(self._append_log_line, entry, line)
+                        m = PERCENT_RE.search(line)
+                        if m:
+                            try:
+                                pct = min(1.0, float(m.group(1)) / 100)
+                            except ValueError:
+                                pct = 0.0
+                            GLib.idle_add(self._entry_progress, i, total, pct)
+                    proc.wait()
+                    rc = proc.returncode
+                except Exception as exc:               # noqa: BLE001
+                    entry["log"] += str(exc) + "\n"
+                    rc = -1
+
+                entry["state"] = "ok" if rc == 0 else "failed"
+                GLib.idle_add(self._entry_updated, entry, i, total, 1.0)
+
+            GLib.idle_add(self._run_finished, todo)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ── Callbacks aus dem Worker ──────────────────────────────────────────────
+
+    def _entry_started(self, entry, index, total):
+        s = self.strings
+        self.progress.set_text(t(s, "queue_running_entry", id=entry["id"],
+                                 n=index + 1, total=total))
+        self._set_log(entry.get("log") or "")
+        self._sync_row_state(entry)
+        return False
+
+    def _entry_progress(self, index, total, pct):
+        self.progress.set_fraction((index + pct) / total)
+        return False
+
+    def _entry_updated(self, entry, index, total, pct):
+        self.progress.set_fraction((index + pct) / total)
+        self._sync_row_state(entry)
+        return False
+
+    def _append_log_line(self, entry, line):
+        if entry["state"] != "running":
+            return False
+        end = self.log_buf.get_end_iter()
+        self.log_buf.insert(end, line + "\n")
+        self.log_view.scroll_to_iter(self.log_buf.get_end_iter(), 0, False, 0, 0)
+        return False
+
+    def _sync_row_state(self, entry):
+        s = self.strings
+        for row in self.store:
+            if row[2] == entry["id"]:
+                row[4] = t(s, self.STATE_KEYS.get(entry["state"], "queue_state_pending"))
+                break
+        return False
+
+    def _run_finished(self, todo):
+        s = self.strings
+        self.running = False
+        self.cancelled = False
+        self._set_buttons_running(False)
+        ok = sum(1 for e in todo if e["state"] == "ok")
+        failed = sum(1 for e in todo if e["state"] == "failed")
+        skipped = sum(1 for e in todo if e["state"] == "skipped")
+        self.progress.set_fraction(1.0 if not failed and not skipped else self.progress.get_fraction())
+        self.progress.set_text(t(s, "queue_finished", ok=ok, failed=failed, skipped=skipped))
+        self.parent_win.queue_finished()
+        self.refresh()
+        return False
 
 
 def main():
